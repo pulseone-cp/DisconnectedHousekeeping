@@ -25,12 +25,17 @@ namespace DisconnectedHousekeeping
                 _stopRequested = true;
             };
 
-            // Usage/help
-            if (args != null && args.Any(a => a.Equals("/?", StringComparison.OrdinalIgnoreCase) || a.Equals("-?", StringComparison.OrdinalIgnoreCase)))
+            // Help
+            if (args != null && args.Any(a =>
+                    a.Equals("/?", StringComparison.OrdinalIgnoreCase) ||
+                    a.Equals("-?", StringComparison.OrdinalIgnoreCase)))
             {
                 PrintUsage();
                 return;
             }
+
+            bool isTestMode = args != null && args.Any(a =>
+                a.Equals("/test", StringComparison.OrdinalIgnoreCase));
 
             if (!IsAdministrator())
             {
@@ -39,7 +44,28 @@ namespace DisconnectedHousekeeping
                 Console.ResetColor();
             }
 
+            if (isTestMode)
+            {
+                Console.WriteLine("----------------------------------------------------------------");
+                Console.WriteLine($"DisconnectedHousekeeping TEST MODE on {Hostname}");
+                Console.WriteLine("No logoff actions or notifications will be performed.");
+                Console.WriteLine("----------------------------------------------------------------");
+                try
+                {
+                    RunTestMode();
+                }
+                catch (Exception ex)
+                {
+                    Console.ForegroundColor = ConsoleColor.Red;
+                    Console.WriteLine($"Critical Error in TEST MODE: {ex}");
+                    Console.ResetColor();
+                }
+                Console.WriteLine("TEST MODE finished.");
+                return;
+            }
+
             var settings = HousekeepingSettings.Load();
+
             bool continuous = args != null && args.Any(a =>
                 a.Equals("/c", StringComparison.OrdinalIgnoreCase) ||
                 a.Equals("-c", StringComparison.OrdinalIgnoreCase) ||
@@ -65,8 +91,8 @@ namespace DisconnectedHousekeeping
                     Console.WriteLine($"Critical Error: {ex}");
                     Console.ResetColor();
                 }
-                Console.WriteLine("Done. Press generic key to exit (unless scripted)...");
-                return; 
+                Console.WriteLine("Done. (Single run finished)");
+                return;
             }
 
             Console.WriteLine($"Mode: Continuous (Interval: {settings.ScanIntervalSeconds}s)");
@@ -98,14 +124,18 @@ namespace DisconnectedHousekeeping
         private static void PrintUsage()
         {
             Console.WriteLine("DisconnectedHousekeeping");
-            Console.WriteLine("Usage: DisconnectedHousekeeping.exe [/c] [/?]");
+            Console.WriteLine("Usage: DisconnectedHousekeeping.exe [/c] [/test] [/?]");
+            Console.WriteLine();
+            Console.WriteLine("  /c       Run continuously (loop). Default is single-run and exit.");
+            Console.WriteLine("  /test    Run in diagnostics mode (no logoffs, just dump WTS + EventLog info).");
+            Console.WriteLine("  /?       Show this help.");
         }
 
         private static void ProcessOnce(HousekeepingSettings settings)
         {
             var nowUtc = DateTime.UtcNow;
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Scanning sessions...");
-            
+
             var sessions = WtsHelper.EnumerateSessions();
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Found {sessions.Count} total sessions.");
 
@@ -118,7 +148,7 @@ namespace DisconnectedHousekeeping
                 if (string.IsNullOrWhiteSpace(s.User))
                 {
                     Console.WriteLine($"[INFO] Skipping Session {s.SessionId} (No Username/System session?)");
-                    continue; 
+                    continue;
                 }
 
                 Console.WriteLine($"--- Processing Disconnected Session {s.SessionId} ({s.Domain}\\{s.User}) ---");
@@ -153,7 +183,7 @@ namespace DisconnectedHousekeeping
                     }
                     else
                     {
-                         Console.WriteLine($"[DEBUG] EventLog Fallback is DISABLED in config.");
+                        Console.WriteLine($"[DEBUG] EventLog Fallback is DISABLED in config.");
                     }
 
                     // Step 3: Idle Time Fallback
@@ -161,8 +191,7 @@ namespace DisconnectedHousekeeping
                     {
                         Console.WriteLine($"[DEBUG] Attempting IdleTime Fallback...");
                         int idleSec = WtsHelper.QueryIdleSeconds(s.SessionId);
-                        
-                        // Valid Idle time is >= 0. Some error states return -1 or 0 if active (but we know it's disconnected)
+
                         Console.WriteLine($"[DEBUG] Raw Idle Seconds from API: {idleSec}");
 
                         if (idleSec >= 0)
@@ -177,7 +206,7 @@ namespace DisconnectedHousekeeping
                         }
                         else
                         {
-                             Console.WriteLine($"[DEBUG] IdleTime Fallback failed (returned {idleSec}).");
+                            Console.WriteLine($"[DEBUG] IdleTime Fallback failed (returned {idleSec}).");
                         }
                     }
                     else if (!resolved && !settings.UseIdleTimeFallback)
@@ -235,6 +264,65 @@ namespace DisconnectedHousekeeping
                 }
             }
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Scan complete.");
+        }
+
+        /// <summary>
+        /// Test-/Diagnosemodus: dump WTS-Infos und Eventlog-Vergleich, keine Logoffs.
+        /// </summary>
+        private static void RunTestMode()
+        {
+            var nowUtc = DateTime.UtcNow;
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] TEST: Enumerating sessions...");
+
+            var sessions = WtsHelper.EnumerateSessions();
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] TEST: Found {sessions.Count} total sessions on {Hostname}.");
+
+            foreach (var s in sessions.OrderBy(x => x.SessionId))
+            {
+                Console.WriteLine("------------------------------------------------------------");
+                Console.WriteLine($"Session {s.SessionId}: {s.Domain}\\{s.User}");
+                Console.WriteLine($"  State: {s.State}, InfoLevel={s.InfoLevel}, Flags={s.SessionFlags}");
+                Console.WriteLine($"  LogonTimeUtc:      {s.LogonTimeUtc:O}");
+                Console.WriteLine($"  ConnectTimeUtc:    {s.ConnectTimeUtc:O}");
+                Console.WriteLine($"  DisconnectTimeUtc: {s.DisconnectTimeUtc:O}");
+                Console.WriteLine($"  LastInputTimeUtc:  {s.LastInputTimeUtc:O}");
+
+                if (s.State == WtsHelper.WTS_CONNECTSTATE_CLASS.WTSDisconnected)
+                {
+                    Console.WriteLine("  TEST: Session is DISCONNECTED. Checking EventLog (ID 40) for comparison...");
+
+                    if (RdsEventLogHelper.TryGetDisconnectTimeUtc(s.SessionId, out var evtUtc, out var recId))
+                    {
+                        Console.WriteLine($"  EventLog: RecordId={recId}, TimeUtc={evtUtc:O}");
+
+                        if (s.DisconnectTimeUtc.HasValue)
+                        {
+                            var delta = s.DisconnectTimeUtc.Value - evtUtc;
+                            Console.WriteLine($"  Δ(WTS - EventLog): {delta.TotalSeconds:F1} seconds");
+                        }
+                        else
+                        {
+                            Console.WriteLine("  WTS DisconnectTimeUtc is NULL, EventLog has a value.");
+                        }
+
+                        var durEvt = nowUtc - evtUtc;
+                        Console.WriteLine($"  Approx. disconnected duration (EventLog): {durEvt.TotalMinutes:F1} min");
+                    }
+                    else
+                    {
+                        Console.WriteLine("  EventLog: No matching EventID 40 found for this SessionID in the last N records.");
+                    }
+
+                    if (s.DisconnectTimeUtc.HasValue)
+                    {
+                        var durWts = nowUtc - s.DisconnectTimeUtc.Value;
+                        Console.WriteLine($"  Approx. disconnected duration (WTS):      {durWts.TotalMinutes:F1} min");
+                    }
+                }
+            }
+
+            Console.WriteLine("------------------------------------------------------------");
+            Console.WriteLine("TEST MODE completed. Review the output above to validate WTS vs EventLog behaviour.");
         }
 
         private static bool ForceLogoffAndWait(int sessionId)
@@ -535,15 +623,16 @@ namespace DisconnectedHousekeeping
             try
             {
                 var info = (WTSINFOEX)Marshal.PtrToStructure(buffer, typeof(WTSINFOEX));
-                session.InfoLevel = info.Level;
+                session.InfoLevel = (int)info.Level;
                 if (info.Level == 1)
                 {
                     var l1 = info.Data.WTSInfoExLevel1;
                     session.SessionFlags = l1.SessionFlags;
+
+                    session.LogonTimeUtc = ToDateTime(l1.LogonTime);
                     session.ConnectTimeUtc = ToDateTime(l1.ConnectTime);
                     session.DisconnectTimeUtc = ToDateTime(l1.DisconnectTime);
                     session.LastInputTimeUtc = ToDateTime(l1.LastInputTime);
-                    session.LogonTimeUtc = ToDateTime(l1.LogonTime);
                 }
             }
             finally
@@ -556,22 +645,6 @@ namespace DisconnectedHousekeeping
         {
             if (fileTime <= 0) return null;
             try { return DateTime.FromFileTimeUtc(fileTime); } catch { return null; }
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct FILETIME
-        {
-            public uint dwLowDateTime;
-            public uint dwHighDateTime;
-        }
-
-        private static DateTime? ToDateTime(FILETIME ft)
-        {
-            ulong high = ft.dwHighDateTime;
-            ulong low = ft.dwLowDateTime;
-            ulong val = (high << 32) + low;
-            if (val == 0) return null;
-            try { return DateTime.FromFileTimeUtc((long)val); } catch { return null; }
         }
 
         private static string QueryString(int sessionId, WTS_INFO_CLASS info)
@@ -595,7 +668,6 @@ namespace DisconnectedHousekeeping
         {
             IntPtr buffer;
             int bytes;
-            // WTSIdleTime = 17
             if (!WTSQuerySessionInformation(IntPtr.Zero, sessionId, WTS_INFO_CLASS.WTSIdleTime, out buffer, out bytes) || buffer == IntPtr.Zero)
                 return -1;
             try
@@ -656,31 +728,53 @@ namespace DisconnectedHousekeeping
             WTSSessionInfoEx = 25
         }
 
-        [StructLayout(LayoutKind.Sequential)]
+        // WTSINFOEX layout (correct for WTSINFOEX_LEVEL1_W)
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct WTSINFOEX
         {
-            public int Level;
-            public int Reserved;
+            public uint Level;
             public WTSINFOEX_LEVEL Data;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Explicit, CharSet = CharSet.Unicode)]
         private struct WTSINFOEX_LEVEL
         {
-            public WTSINFOEX_LEVEL1 WTSInfoExLevel1;
+            [FieldOffset(0)]
+            public WTSINFOEX_LEVEL1_W WTSInfoExLevel1;
         }
 
-        [StructLayout(LayoutKind.Sequential)]
-        private struct WTSINFOEX_LEVEL1
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WTSINFOEX_LEVEL1_W
         {
-            public int SessionId;
+            public uint SessionId;
             public WTS_CONNECTSTATE_CLASS SessionState;
             public int SessionFlags;
-            public FILETIME ConnectTime;
-            public FILETIME DisconnectTime;
-            public FILETIME LastInputTime;
-            public FILETIME LogonTime;
-            public FILETIME CurrentTime;
+
+            // WINSTATIONNAME_LENGTH = 32 (+1)
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 33)]
+            public string WinStationName;
+
+            // USERNAME_LENGTH = 20 (+1)
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 21)]
+            public string UserName;
+
+            // DOMAIN_LENGTH = 17 (+1)
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 18)]
+            public string DomainName;
+
+            // LARGE_INTEGER times in FILETIME (100ns since 1601)
+            public long LogonTime;
+            public long ConnectTime;
+            public long DisconnectTime;
+            public long LastInputTime;
+            public long CurrentTime;
+
+            public uint IncomingBytes;
+            public uint OutgoingBytes;
+            public uint IncomingFrames;
+            public uint OutgoingFrames;
+            public uint IncomingCompressedBytes;
+            public uint OutgoingCompressedBytes;
         }
     }
 
@@ -695,13 +789,10 @@ namespace DisconnectedHousekeeping
 
             try
             {
-                // HYBRID LÖSUNG (Best Practice):
-                // Der Windows XPath Parser ist extrem limitiert und unterstützt oft keine Namespaces 
-                // oder komplexe Funktionen wie 'local-name()' innerhalb von UserData.
-                // Lösung: Wir filtern nach EventID 40 (schnell & sicher) und prüfen die SessionID im Code.
-                
+                // HYBRID-Ansatz:
+                // Filter nach EventID 40 (Session disconnected) und suche SessionID im XML.
                 string xPath = "*[System[(EventID=40)]]";
-                
+
                 var query = new EventLogQuery(Channel, PathType.LogName, xPath)
                 {
                     ReverseDirection = true // Neueste zuerst
@@ -709,8 +800,6 @@ namespace DisconnectedHousekeeping
 
                 using (var reader = new EventLogReader(query))
                 {
-                    // Sicherheits-Counter: Wir prüfen maximal die letzten 100 Disconnects. 
-                    // Wenn die Session dort nicht dabei ist, ist der Eintrag wohl schon rotiert.
                     int maxEventsToScan = 100;
                     int scanned = 0;
 
@@ -720,13 +809,8 @@ namespace DisconnectedHousekeeping
 
                         using (rec)
                         {
-                            // XML als String holen. Das umgeht alle Namespace-Probleme.
-                            // Das XML sieht so aus: <Session>17</Session> (innerhalb von Namespaces)
                             string xml = rec.ToXml();
-
-                            // Wir suchen explizit nach den Tags um Verwechslungen (z.B. Session 117) zu vermeiden.
-                            // Diese Suche ist extrem schnell im Speicher.
-                            string searchPattern = $">{sessionId}<"; 
+                            string searchPattern = $">{sessionId}<";
 
                             if (xml.Contains(searchPattern))
                             {
@@ -734,7 +818,7 @@ namespace DisconnectedHousekeeping
                                 {
                                     utc = rec.TimeCreated.Value.ToUniversalTime();
                                     recordId = rec.RecordId.GetValueOrDefault(0L);
-                                    
+
                                     Console.ForegroundColor = ConsoleColor.Green;
                                     Console.WriteLine($"[DEBUG] Found Session {sessionId} in EventRecord {recordId} (Time: {utc:HH:mm:ss})");
                                     Console.ResetColor();
@@ -752,6 +836,4 @@ namespace DisconnectedHousekeeping
             return false;
         }
     }
-    
-    
 }
