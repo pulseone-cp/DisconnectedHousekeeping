@@ -1,0 +1,7 @@
+C:\Users\cp\RiderProjects\DisconnectedHousekeeping\DisconnectedHousekeeping\bin\Debug\DisconnectedHousekeeping.exe.config
+C:\Users\cp\RiderProjects\DisconnectedHousekeeping\DisconnectedHousekeeping\bin\Debug\DisconnectedHousekeeping.exe
+C:\Users\cp\RiderProjects\DisconnectedHousekeeping\DisconnectedHousekeeping\bin\Debug\DisconnectedHousekeeping.pdb
+C:\Users\cp\RiderProjects\DisconnectedHousekeeping\DisconnectedHousekeeping\obj\Debug\DisconnectedHousekeeping.csproj.AssemblyReference.cache
+C:\Users\cp\RiderProjects\DisconnectedHousekeeping\DisconnectedHousekeeping\obj\Debug\DisconnectedHousekeeping.csproj.CoreCompileInputs.cache
+C:\Users\cp\RiderProjects\DisconnectedHousekeeping\DisconnectedHousekeeping\obj\Debug\DisconnectedHousekeeping.exe
+C:\Users\cp\RiderProjects\DisconnectedHousekeeping\DisconnectedHousekeeping\obj\Debug\DisconnectedHousekeeping.pdb
