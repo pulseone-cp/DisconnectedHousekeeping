@@ -7,6 +7,7 @@ using System.Net.Mail;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Linq;
 
@@ -370,9 +371,11 @@ namespace DisconnectedHousekeeping
 
         private static void SendEmail(HousekeepingSettings s, LogoffDetails d)
         {
-            var subject = string.IsNullOrWhiteSpace(s.EmailSubject)
-                ? $"Disconnected session logged off on {d.Hostname}: {d.Domain}\\{d.Username} (Session {d.SessionId})"
+            var subjectTemplate = string.IsNullOrWhiteSpace(s.EmailSubject)
+                ? "Disconnected session logged off on {{host}}: {{account}} (Session {{session}})"
                 : s.EmailSubject;
+
+            var subject = RenderTemplate(subjectTemplate, d);
 
             var body = new StringBuilder();
             body.AppendLine($"Hostname: {d.Hostname}");
@@ -402,6 +405,39 @@ namespace DisconnectedHousekeeping
                     client.Send(msg);
                 }
             }
+        }
+
+        private static string RenderTemplate(string template, LogoffDetails d)
+        {
+            var now = DateTime.Now;
+            var account = string.IsNullOrWhiteSpace(d.Domain) ? (d.Username ?? string.Empty) : ($"{d.Domain}\\{d.Username}");
+
+            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["name"] = d.Username ?? string.Empty,
+                ["user"] = d.Username ?? string.Empty,
+                ["domain"] = d.Domain ?? string.Empty,
+                ["account"] = account,
+                ["host"] = string.IsNullOrWhiteSpace(d.Hostname) ? Hostname : d.Hostname,
+                ["hostname"] = string.IsNullOrWhiteSpace(d.Hostname) ? Hostname : d.Hostname,
+                ["session"] = d.SessionId.ToString(),
+                ["disconnect_utc"] = d.DisconnectTimeUtc.ToUniversalTime().ToString("O"),
+                ["disconnect_local"] = d.DisconnectTimeUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"),
+                ["duration"] = FormatDuration(d.DisconnectedDuration),
+                ["minutes"] = Math.Round(d.DisconnectedDuration.TotalMinutes, 0).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["result"] = d.Result ?? string.Empty,
+                ["datetime"] = now.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["date"] = now.ToString("yyyy-MM-dd"),
+                ["time"] = now.ToString("HH:mm:ss")
+            };
+
+            string Replacer(Match m)
+            {
+                var key = m.Groups[1].Value;
+                return map.TryGetValue(key, out var val) ? val : m.Value; // leave unknown tokens unchanged
+            }
+
+            return Regex.Replace(template ?? string.Empty, @"\{\{\s*([a-zA-Z0-9_]+)\s*\}\}", Replacer);
         }
 
         private static async System.Threading.Tasks.Task SendRest(HousekeepingSettings s, LogoffDetails d)

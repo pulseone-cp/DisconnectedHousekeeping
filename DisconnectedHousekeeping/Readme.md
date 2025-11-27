@@ -58,7 +58,28 @@ SMTP email notifications:
 - `EmailTo` (comma/semicolon-separated list)
 - `SmtpUser` (string, optional)
 - `SmtpPassword` (string, optional)
-- `EmailSubject` (string, optional)
+- `EmailSubject` (string, optional) — supports placeholders like `{{name}}`, `{{host}}`, `{{datetime}}` (see list below)
+
+Subject template placeholders (for `EmailSubject`):
+
+- `{{name}}` / `{{user}}` — the username
+- `{{domain}}` — the user domain (may be empty)
+- `{{account}}` — combined account name (`DOMAIN\\User` or just `User` when domain is empty)
+- `{{host}}` / `{{hostname}}` — the machine name where the utility runs
+- `{{session}}` — numeric Session ID
+- `{{disconnect_utc}}` — disconnect timestamp in UTC (ISO 8601, `O` format)
+- `{{disconnect_local}}` — disconnect timestamp in local time (`yyyy-MM-dd HH:mm:ss`)
+- `{{duration}}` — human-readable disconnected duration (e.g., `0d 2h 15m 3s`)
+- `{{minutes}}` — disconnected duration in whole minutes
+- `{{result}}` — logoff result string
+- `{{datetime}}` — current local date/time when the email is produced (`yyyy-MM-dd HH:mm:ss`)
+- `{{date}}` — current local date (`yyyy-MM-dd`)
+- `{{time}}` — current local time (`HH:mm:ss`)
+
+Notes:
+
+- Placeholders are case-insensitive and any unknown placeholders are left unchanged.
+- If `EmailSubject` is empty, the default subject is: `Disconnected session logged off on {{host}}: {{domain}}\\{{name}} (Session {{session}})`
 
 REST notifications:
 
@@ -88,7 +109,7 @@ Example `App.config` snippet:
   <add key="EmailTo" value=""/>
   <add key="SmtpUser" value=""/>
   <add key="SmtpPassword" value=""/>
-  <add key="EmailSubject" value=""/>
+  <add key="EmailSubject" value="Disconnected {{account}} (Session {{session}}) on {{host}} at {{datetime}}"/>
 
   <!-- REST notification settings -->
   <add key="RestEnabled" value="false"/>
